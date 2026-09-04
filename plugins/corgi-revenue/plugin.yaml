@@ -1,0 +1,5 @@
+name: corgi-revenue
+version: 1.0.0
+description: Show Corgi Cafe's live daily revenue from the configured channel ledger.
+platforms:
+  - telegram
