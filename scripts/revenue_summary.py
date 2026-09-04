@@ -18,7 +18,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from square_daily_revenue import list_completed_payments, telegram_send
+from square_daily_revenue import daily_completed_payments, telegram_send
 
 
 CHANNELS = ("deliveroo", "uber_eats")
@@ -120,6 +120,9 @@ def fx_rate(base: str, quote: str) -> Decimal:
         for node in root.iter()
         if "currency" in node.attrib and "rate" in node.attrib
     }
+    rate_dates = [node.attrib["time"] for node in root.iter() if "time" in node.attrib]
+    if not rate_dates or not 0 <= (datetime.now(ZoneInfo("Europe/London")).date() - date.fromisoformat(max(rate_dates))).days <= 7:
+        fail("FX daily reference is missing or stale")
     rates["EUR"] = Decimal("1")
     try:
         if base == "EUR":
@@ -130,7 +133,7 @@ def fx_rate(base: str, quote: str) -> Decimal:
             rate = rates[quote] / rates[base]
     except (KeyError, ZeroDivisionError) as exc:
         fail(f"FX rate unavailable for {base}/{quote}: {exc}")
-    if rate <= 0:
+    if not rate.is_finite() or rate <= 0:
         fail("FX rate must be positive")
     return rate
 
@@ -151,14 +154,12 @@ def summary(day: str) -> str:
     token = os.getenv("SQUARE_ACCESS_TOKEN")
     location_id = os.getenv("SQUARE_LOCATION_ID")
     source_currency = os.getenv("REVENUE_SOURCE_CURRENCY", "GBP").upper()
-    square_today = 0
-    square_trailing = 0
     square_connected = bool(token and location_id)
-    if square_connected:
-        square_today, _, source_currency = list_completed_payments(token, location_id, day_start, day_end)
-        square_trailing, _, source_currency = list_completed_payments(
-            token, location_id, trailing_start, day_end
-        )
+    if not square_connected:
+        fail("Square is not configured")
+    days, source_currency = daily_completed_payments(token, location_id, trailing_start, day_end)
+    square_today = days.get(day, (0, 0))[0]
+    square_trailing = sum(value[0] for value in days.values())
 
     external_today = sum(amount for amount, _ in external_totals(day).values())
     external_trailing, external_complete = external_range(local_day, 30)
@@ -175,13 +176,14 @@ def summary(day: str) -> str:
     return "\n".join(
         (
             "📊 Corgi Cafe — revenue",
-            f"Today ({day}): __USD__{today_total / 100:,.2f}",
+            f"Daily revenue ({day}): __USD__{Decimal(today_total) / 100:,.2f}",
             (
                 f"Trailing 30 days ({trailing_start.date().isoformat()} to {day}): "
-                f"__USD__{trailing_total / 100:,.2f}"
+                f"__USD__{Decimal(trailing_total) / 100:,.2f}"
             ),
             f"FX: {rate_line}",
             f"Coverage: {coverage}",
+            f"Updated: {datetime.now(ZoneInfo(timezone_name)).strftime('%Y-%m-%d %H:%M')} UK",
         )
     ).replace("__USD__", "$")
 
@@ -211,9 +213,9 @@ def main() -> int:
         print(text)
         return 0
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = os.getenv("REPORT_CHAT_ID")
     if not token or not chat_id:
-        fail("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required when sending")
+        fail("TELEGRAM_BOT_TOKEN and REPORT_CHAT_ID are required when sending")
     telegram_send(token, chat_id, text)
     print(f"Recorded: {now.isoformat()}")
     return 0

@@ -1,8 +1,6 @@
-name: Daily combined revenue broadcast
+name: Revenue preview (broadcast owned by bot)
 
 on:
-  schedule:
-    - cron: "0 16,17 * * *"
   workflow_dispatch:
     inputs:
       report_date:
@@ -12,7 +10,7 @@ on:
       dry_run:
         description: "Read connected sources and show the message without sending it"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions: {}
@@ -25,11 +23,8 @@ jobs:
       SQUARE_LOCATION_ID: ${{ secrets.SQUARE_LOCATION_ID }}
       SQUARE_TIMEZONE: Europe/London
       REVENUE_LEDGER_JSON: ${{ secrets.REVENUE_LEDGER_JSON }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       REPORT_DATE: ${{ inputs.report_date }}
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
-      SCHEDULE_GUARD: ${{ github.event_name == 'schedule' && '17' || '' }}
+      DRY_RUN: 'true'
     steps:
       - name: Check out the report
         uses: actions/checkout@v4
@@ -37,5 +32,5 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Read connected sources and broadcast
+      - name: Preview only; never send from this workflow
         run: python scripts/revenue_summary.py

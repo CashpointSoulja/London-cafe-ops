@@ -42,7 +42,7 @@ def square_get(path: str, token: str, params: dict[str, str]) -> dict:
         fail(f"Square API connection failed: {exc.reason}")
 
 
-def list_completed_payments(token: str, location_id: str, start: datetime, end: datetime) -> tuple[int, int, str]:
+def daily_completed_payments(token: str, location_id: str, start: datetime, end: datetime) -> tuple[dict, str]:
     params = {
         "location_id": location_id,
         "begin_time": start.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -51,22 +51,40 @@ def list_completed_payments(token: str, location_id: str, start: datetime, end: 
         "sort_field": "CREATED_AT",
         "sort_order": "ASC",
     }
-    total_minor = 0
-    completed = 0
+    days = {}
     currency = "GBP"
+    seen_payments = set()
+    seen_cursors = set()
     while True:
         payload = square_get("/v2/payments", token, params)
         for payment in payload.get("payments", []):
             if payment.get("status") != "COMPLETED":
                 continue
-            completed += 1
+            created = datetime.fromisoformat(payment["created_at"].replace("Z", "+00:00"))
+            if not start <= created < end or payment["id"] in seen_payments:
+                continue
+            seen_payments.add(payment["id"])
             money = payment.get("total_money") or {}
-            total_minor += int(money.get("amount") or 0)
-            currency = money.get("currency") or currency
+            if money.get("currency") != currency:
+                fail("Unexpected Square currency; reporting requires GBP")
+            amount = money.get("amount")
+            if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+                fail("Invalid Square payment amount")
+            key = created.astimezone(start.tzinfo).date().isoformat()
+            total, count = days.get(key, (0, 0))
+            days[key] = (total + amount, count + 1)
         cursor = payload.get("cursor")
         if not cursor:
-            return total_minor, completed, currency
+            return days, currency
+        if cursor in seen_cursors:
+            fail("Square pagination repeated a cursor")
+        seen_cursors.add(cursor)
         params["cursor"] = cursor
+
+
+def list_completed_payments(token: str, location_id: str, start: datetime, end: datetime) -> tuple[int, int, str]:
+    days, currency = daily_completed_payments(token, location_id, start, end)
+    return sum(value[0] for value in days.values()), sum(value[1] for value in days.values()), currency
 
 
 def money(amount_minor: int, currency: str) -> str:

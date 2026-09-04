@@ -1,0 +1,20 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env.bot
+    environment:
+      SQUARE_TIMEZONE: Europe/London
+      BOT_DB_PATH: /opt/data/corgi.sqlite3
+    volumes:
+      - bot-data:/opt/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+volumes:
+  bot-data:
