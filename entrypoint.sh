@@ -6,7 +6,10 @@ profile_dir=/opt/data/profiles/corgitasksops
 mkdir -p "$profile_dir"
 
 write_secret() {
-  value=$(printenv "$1")
+  value=$(printenv "$1" 2>/dev/null || true)
+  if [ -z "$value" ]; then
+    return 0
+  fi
   printf '%s' "$value" | base64 -d > "$2"
   chmod 600 "$2"
   unset value
@@ -17,30 +20,16 @@ write_secret HERMES_PROFILE_B64 "$profile_dir/profile.yaml"
 write_secret HERMES_SOUL_B64 "$profile_dir/SOUL.md"
 write_secret HERMES_ENV_B64 "$profile_dir/.env"
 write_secret HERMES_AUTH_B64 /opt/data/auth.json
-chown -R hermes:hermes "$profile_dir" /opt/data/auth.json
 
-# User plugins live under the active HERMES_HOME, which is /opt/data in this image.
-mkdir -p /opt/data/plugins/corgi-revenue
-cp /opt/hermes-cloud/plugins/corgi-revenue/plugin.yaml /opt/data/plugins/corgi-revenue/plugin.yaml
-cp /opt/hermes-cloud/plugins/corgi-revenue/__init__.py /opt/data/plugins/corgi-revenue/__init__.py
-chown -R hermes:hermes /opt/data/plugins/corgi-revenue
+if [ -f "$profile_dir/.env" ] && [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+  set -a
+  . "$profile_dir/.env"
+  set +a
+fi
 
-# Keep the revenue slash command enabled without replacing the user's profile config.
-python - "$profile_dir/config.yaml" <<'PY'
-import sys
-from pathlib import Path
+chown -R hermes:hermes "$profile_dir" 2>/dev/null || true
+if [ -f /opt/data/auth.json ]; then
+  chown hermes:hermes /opt/data/auth.json
+fi
 
-import yaml
-
-path = Path(sys.argv[1])
-config = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-plugins = config.setdefault("plugins", {})
-enabled = plugins.setdefault("enabled", [])
-if isinstance(enabled, list) and "corgi-revenue" not in enabled:
-    enabled.append("corgi-revenue")
-path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-PY
-chown hermes:hermes "$profile_dir/config.yaml"
-
-python -m http.server "${PORT:-8080}" --directory /opt/hermes-cloud >/tmp/health.log 2>&1 &
-exec /opt/hermes/docker/entrypoint-dispatch.sh --profile corgitasksops gateway run
+exec python /opt/hermes-cloud/deterministic_bot.py
