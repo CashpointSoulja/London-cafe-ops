@@ -19,6 +19,12 @@ write_secret HERMES_ENV_B64 "$profile_dir/.env"
 write_secret HERMES_AUTH_B64 /opt/data/auth.json
 chown -R hermes:hermes "$profile_dir" /opt/data/auth.json
 
+# User plugins live under the active HERMES_HOME, which is /opt/data in this image.
+mkdir -p /opt/data/plugins/corgi-revenue
+cp /opt/hermes-cloud/plugins/corgi-revenue/plugin.yaml /opt/data/plugins/corgi-revenue/plugin.yaml
+cp /opt/hermes-cloud/plugins/corgi-revenue/__init__.py /opt/data/plugins/corgi-revenue/__init__.py
+chown -R hermes:hermes /opt/data/plugins/corgi-revenue
+
 # Keep the revenue slash command enabled without replacing the user's profile config.
 python - "$profile_dir/config.yaml" <<'PY'
 import sys
