@@ -1,4 +1,4 @@
-name: Daily Square revenue broadcast
+name: Daily combined revenue broadcast
 
 on:
   schedule:
@@ -10,7 +10,7 @@ on:
         required: false
         type: string
       dry_run:
-        description: "Read Square and show the message without sending it"
+        description: "Read connected sources and show the message without sending it"
         required: false
         default: false
         type: boolean
@@ -24,6 +24,7 @@ jobs:
       SQUARE_ACCESS_TOKEN: ${{ secrets.SQUARE_ACCESS_TOKEN }}
       SQUARE_LOCATION_ID: ${{ secrets.SQUARE_LOCATION_ID }}
       SQUARE_TIMEZONE: Europe/London
+      REVENUE_LEDGER_JSON: ${{ secrets.REVENUE_LEDGER_JSON }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       REPORT_DATE: ${{ inputs.report_date }}
@@ -36,5 +37,5 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Read Square and broadcast
-        run: python scripts/square_daily_revenue.py
+      - name: Read connected sources and broadcast
+        run: python scripts/revenue_summary.py
