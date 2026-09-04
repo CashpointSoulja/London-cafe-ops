@@ -1,6 +1,7 @@
 // Deterministic Telegram webhook/worker. Secrets belong in Supabase Function secrets.
-import { revenue as fetchRevenue } from "../../../cloud_revenue.ts";
+import { revenue as fetchRevenue, cafeName } from "../../../cloud_revenue.ts";
 const env = (key: string) => Deno.env.get(key)?.trim() ?? "";
+const botUsername = () => env("CAFEBOT_USERNAME") || "londoncafeopsbot";
 const url = () => env("SUPABASE_URL").replace(/\/$/, "");
 const key = () => env("SUPABASE_SERVICE_ROLE_KEY");
 const headers = () => ({ apikey: key(), Authorization: `Bearer ${key()}`, "Content-Type": "application/json" });
@@ -35,7 +36,7 @@ function secret(request: Request, header: string, expected: string) {
 
 export function command(raw: unknown) {
   const match = String(raw ?? "").trim().match(/^\/(revenue|task|wins)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i);
-  if (!match || (match[2] && match[2].toLowerCase() !== "londoncafeopsbot")) return null;
+  if (!match || (match[2] && match[2].toLowerCase() !== botUsername().toLowerCase())) return null;
   return { name: match[1].toLowerCase(), argument: (match[3] ?? "").trim() };
 }
 
@@ -51,10 +52,11 @@ async function config(name: string) {
 export async function revenue(day?: string): Promise<string> {
   const target = day ?? new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/London" }).format(new Date());
   const rows = await db(`cafe_bot_reports?day=eq.${encodeURIComponent(target)}&select=body,source,updated_at&limit=1`);
-  if (rows?.[0] && Date.now() - Date.parse(rows[0].updated_at) < 60000) return rows[0].body;
-  const report = await fetchRevenue(target, rows?.[0]?.source?.square?.history);
+  const sameCafe = rows?.[0]?.source?.locationId === env("CAFEBOT_SQUARE_LOCATION") && rows?.[0]?.source?.cafeName === cafeName();
+  if (sameCafe && Date.now() - Date.parse(rows[0].updated_at) < 60000) return rows[0].body;
+  const report = await fetchRevenue(target, sameCafe ? rows?.[0]?.source?.square?.history : undefined);
   await db("cafe_bot_reports", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: json({ day: target, body: report.body, source: report.source, updated_at: new Date().toISOString() }) });
+    body: json({ day: target, body: report.body, source: { ...report.source, cafeName: cafeName(), locationId: env("CAFEBOT_SQUARE_LOCATION") }, updated_at: new Date().toISOString() }) });
   return report.body;
 }
 
@@ -95,11 +97,14 @@ async function resolveDestination() {
   if (checked && Date.now() - Date.parse(checked) < 300000) return;
   await db("cafe_bot_config", { method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
     body: json({ key: "destination_checked_at", value: new Date().toISOString() }) });
-  // Only the two ID representations in Ayo's supplied links are eligible.
-  for (const candidate of ["-2394851554", "-1002394851554"]) {
+  // New cafes require explicit destinations; never inherit Shoreditch's chat.
+  const candidates = env("CAFEBOT_DESTINATION_IDS") || (botUsername() === "londoncafeopsbot" ? "-2394851554,-1002394851554" : "");
+  for (const candidate of candidates.split(",").map((id) => id.trim()).filter((id) => /^-\d+$/.test(id))) {
     try {
       const chat = (await telegram("getChat", { chat_id: candidate })).result;
-      const member = (await telegram("getChatMember", { chat_id: candidate, user_id: 8882338438 })).result;
+      const me = (await telegram("getMe", {})).result;
+      if (me.username !== botUsername()) throw new Error("bot identity mismatch");
+      const member = (await telegram("getChatMember", { chat_id: candidate, user_id: me.id })).result;
       const canPost = member.status === "administrator" || member.status === "creator" ||
         (member.status === "member" && chat.permissions?.can_send_messages !== false);
       if (!canPost || chat.type === "channel" && !member.can_post_messages || chat.is_forum) continue;
@@ -146,7 +151,7 @@ async function processJob(job: Record<string, unknown>) {
       const user = (payload.from ?? {}) as Record<string, unknown>;
       messages.push({ id: `${job.id}:win`, payload: {
         chat_id: null, broadcast: true,
-        text: `🏆 Corgi Cafe — team win\n${displayName(user)}\n${parsed.argument}`,
+        text: `🏆 ${cafeName()} — team win\n${displayName(user)}\n${parsed.argument}`,
       }});
       reply += "\nQueued for the reporting chat.";
     }
@@ -237,7 +242,7 @@ export async function handler(request: Request) {
     if (request.method === "POST" && path.endsWith("/install")) {
       if (!secret(request, "X-Worker-Secret", env("CAFEBOT_WORKER_SECRET"))) return text("unauthorized", 401);
       const me = await telegram("getMe", {});
-      if (me.result.username !== "londoncafeopsbot") return text("bot identity mismatch", 409);
+      if (me.result.username !== botUsername()) return text("bot identity mismatch", 409);
       await telegram("setMyCommands", { commands: [
         { command: "revenue", description: "Daily and trailing 30-day revenue" },
         { command: "task", description: "Record a task" },

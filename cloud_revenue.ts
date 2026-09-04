@@ -12,6 +12,12 @@ function env(name: string): string {
 
 function fail(message: string): never { throw new Error(`Revenue unavailable: ${message}`); }
 
+export function cafeName(): string {
+  const name = env("CAFEBOT_CAFE_NAME").trim() || "Corgi Cafe Shoreditch";
+  if (name.length > 100 || /[\r\n]/.test(name)) fail("invalid cafe name");
+  return name;
+}
+
 function validDay(day: string): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) fail("day must be YYYY-MM-DD");
   const [year, month, date] = day.split("-").map(Number);
@@ -179,6 +185,6 @@ export async function revenue(day?: string, history?: { days: Record<string, { m
   const trailingUsd = halfUp(safeAdd(squareTrailing, ledger.minor, "trailing total"), rate);
   const timestamp = new Intl.DateTimeFormat("en-GB", { timeZone: UK, dateStyle: "short", timeStyle: "short" }).format(now);
   const coverage = ledger.covered === dates.length ? "complete" : "partial";
-  const body = ["📊 Corgi Cafe — revenue", target, "", `Daily revenue: ${money(dailyUsd)}`, `Trailing 30 days: ${money(trailingUsd)}`].join("\n");
+  const body = [`📊 ${cafeName()} — Daily update`, target, "", `Daily revenue: ${money(dailyUsd)}`, `Trailing 30 days: ${money(trailingUsd)}`].join("\n");
   return { body, source: { square: { dailyMinor: dailySquare, trailingMinor: squareTrailing, dailyAmountsMinor: Object.fromEntries(dates.map((date) => [date, square.days[date]?.minor ?? 0])), completedCount: square.count, currency: "GBP", history: { days: Object.fromEntries(dates.map((date) => [date, { minor: square.days[date]?.minor ?? 0, count: square.days[date]?.count ?? 0 }])), fetchedAt: reuse ? history!.fetchedAt : now.toISOString() } }, ledger: { dailyMinor: dailyLedger, trailingMinor: ledger.minor, coveredDates: ledger.covered, expectedDates: dates.length, channels: ["deliveroo", "uber_eats"] }, fx: { rate: fxInfo.display, date: fxInfo.date, base: "GBP", quote: "USD" }, coverage, timestampUK: timestamp } };
 }

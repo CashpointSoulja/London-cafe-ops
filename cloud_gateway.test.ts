@@ -72,3 +72,30 @@ test("command suffix and UK schedule boundaries are deterministic", () => {
   assert.equal(gateway.schedule(new Date("2026-09-05T00:05:00+01:00")), "2026-09-04");
   assert.equal(gateway.schedule(new Date("2026-01-05T00:05:00Z")), "2026-01-04");
 });
+
+test("another cafe accepts its own bot suffix, not Shoreditch's", () => {
+  values.CAFEBOT_USERNAME = "futurecafebot";
+  try {
+    assert.deepEqual(gateway.command("/revenue@futurecafebot"), { name: "revenue", argument: "" });
+    assert.equal(gateway.command("/revenue@londoncafeopsbot"), null);
+  } finally { delete values.CAFEBOT_USERNAME; }
+});
+
+test("fresh cache from another cafe is not returned", async () => {
+  const previousFetch = globalThis.fetch;
+  values.CAFEBOT_SQUARE_LOCATION = "new-location";
+  values.CAFEBOT_SQUARE_TOKEN = "test";
+  let locationId = "other-location";
+  globalThis.fetch = async (input) => String(input).includes("cafe_bot_reports")
+    ? new Response(JSON.stringify([{ body: "cached", updated_at: new Date().toISOString(), source: { locationId, cafeName: "Corgi Cafe Shoreditch" } }]))
+    : new Response("offline", { status: 503 });
+  try {
+    await assert.rejects(() => gateway.revenue("2026-09-04"), /Revenue unavailable/);
+    locationId = "new-location";
+    assert.equal(await gateway.revenue("2026-09-04"), "cached");
+  } finally {
+    globalThis.fetch = previousFetch;
+    delete values.CAFEBOT_SQUARE_LOCATION;
+    delete values.CAFEBOT_SQUARE_TOKEN;
+  }
+});

@@ -1,5 +1,15 @@
 # Corgi Cafe bot — deployment record
 
+## Adding another cafe
+
+Reuse this code, with one isolated Supabase project/database and Telegram bot per cafe. This is intentionally not a shared multi-tenant database. Never point two cafe deployments at the same tables, or register two deployments for one Telegram token.
+
+Set `CAFEBOT_CAFE_NAME` (currently `Corgi Cafe Shoreditch`), `CAFEBOT_USERNAME`, `CAFEBOT_SQUARE_LOCATION`, that cafe's Square/Telegram tokens, fresh worker/webhook secrets, and `CAFEBOT_DESTINATION_IDS` (comma-separated verified chat IDs). Apply the migration to the new database and configure its own cron/Vault secret with that project's function URL. Each cafe has independent records, report cache, destination and delivery queue. Cached revenue includes cafe name and Square location identity and is not reused after either changes.
+
+Currently UK calendar days, GBP Square payments and USD reporting are supported. Non-UK cafes need explicit timezone/currency work before onboarding. A combined all-cafe dashboard is not implemented. No future cafes or paid projects are created by this change.
+
+The report heading includes the configured cafe name and Daily update; the body stays limited to date, daily revenue and trailing 30 days. FX and coverage evidence remain in the stored source record.
+
 The live bot is Supabase Edge Function `cafe-bot`, version 4, in Corgi Relay project `pvrmzqxtmhewyrluuqka`. It uses one Telegram webhook for `@londoncafeopsbot`; no Telegram poller is required. Render is excluded from the Telegram path. Its old process cannot be shut down from this workspace, so it must not be started alongside the webhook.
 
 ## Live behaviour

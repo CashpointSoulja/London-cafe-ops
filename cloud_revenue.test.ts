@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { revenue } from "./cloud_revenue.ts";
+import { revenue, cafeName } from "./cloud_revenue.ts";
+
+test("cafe label is configurable and rejects multiline labels", () => {
+  const previous = process.env.CAFEBOT_CAFE_NAME;
+  try {
+    process.env.CAFEBOT_CAFE_NAME = "Corgi Cafe Future Location";
+    assert.equal(cafeName(), "Corgi Cafe Future Location");
+    process.env.CAFEBOT_CAFE_NAME = "Cafe\nFake revenue";
+    assert.throws(cafeName, /invalid cafe name/);
+  } finally {
+    if (previous === undefined) delete process.env.CAFEBOT_CAFE_NAME;
+    else process.env.CAFEBOT_CAFE_NAME = previous;
+  }
+});
 
 test("rejects malformed report dates", async () => {
   await assert.rejects(() => revenue("2026-02-30"), /day must be YYYY-MM-DD/);
@@ -27,7 +40,7 @@ test("aggregates completed GBP payments, pagination, ledger and ECB FX", async (
   };
   try {
     const result = await revenue("2026-03-29");
-    assert.match(result.body, /^📊 Corgi Cafe — revenue\n2026-03-29\n\nDaily revenue: \$14\.38\nTrailing 30 days: \$[\d,.]+$/);
+    assert.match(result.body, /^📊 Corgi Cafe Shoreditch — Daily update\n2026-03-29\n\nDaily revenue: \$14\.38\nTrailing 30 days: \$[\d,.]+$/);
     assert.equal((result.source as any).coverage, "partial");
     assert.equal((result.source as any).square.dailyMinor, 1000);
     assert.equal((result.source as any).square.trailingMinor, 3000);
