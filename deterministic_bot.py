@@ -19,6 +19,7 @@ from pathlib import Path
 
 SCRIPT = "/opt/hermes-cloud/scripts/revenue_summary.py"
 OFFSET_PATH = Path(os.getenv("TELEGRAM_OFFSET_PATH", "/opt/data/telegram_offset"))
+RECORDS_PATH = Path(os.getenv("TELEGRAM_RECORDS_PATH", "/opt/data/corgi_records.jsonl"))
 
 
 def api(token: str, method: str, payload: dict | None = None, timeout: int = 40) -> dict:
@@ -71,11 +72,28 @@ def revenue_text() -> str:
     return result.stdout.strip() or "Revenue unavailable right now: empty source response"
 
 
+def record_event(command: str, argument: str, message: dict) -> None:
+    RECORDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "kind": command,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "chat_id": message.get("chat", {}).get("id"),
+        "user_id": (message.get("from") or {}).get("id"),
+        "username": (message.get("from") or {}).get("username"),
+        "text": argument,
+    }
+    with RECORDS_PATH.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
 def response_for(command: str, argument: str) -> str | None:
     if command == "revenue":
         return revenue_text()
-    if command in {"start", "help", "commands"}:
-        return "Corgi Cafe bot\n\n/revenue — current day's live revenue\n/help — show this help"
+    if command in {"task", "wins"}:
+        if not argument:
+            return f"Usage: /{command} <description>"
+        label = "Task" if command == "task" else "Win"
+        return f"✅ {label} recorded: {argument}"
     return None
 
 
@@ -116,7 +134,9 @@ def self_test() -> None:
     assert parse_command("/revenue") == ("revenue", "")
     assert parse_command("/revenue@londoncafeopsbot now") == ("revenue", "now")
     assert parse_command("hello") is None
-    assert response_for("help", "")
+    assert response_for("task", "") == "Usage: /task <description>"
+    assert response_for("wins", "sold out") == "✅ Win recorded: sold out"
+    assert response_for("help", "") is None
     assert response_for("unknown", "") is None
     print("self-test passed")
 
@@ -129,9 +149,10 @@ def run() -> None:
     server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     api(token, "setMyCommands", {"commands": json.dumps([
-        {"command": "revenue", "description": "Today's live revenue"},
-        {"command": "help", "description": "Show available commands"},
-    ])})
+                {"command": "revenue", "description": "Today's live revenue"},
+                {"command": "task", "description": "Record a task"},
+                {"command": "wins", "description": "Record a win"},
+            ])})
     offset = load_offset()
     while True:
         try:
@@ -145,6 +166,8 @@ def run() -> None:
                 parsed = parse_command(str(message.get("text", "")))
                 if not parsed:
                     continue
+                if parsed[0] in {"task", "wins"} and parsed[1]:
+                    record_event(parsed[0], parsed[1], message)
                 reply = response_for(*parsed)
                 if reply is not None:
                     api(token, "sendMessage", {"chat_id": str(message["chat"]["id"]), "text": reply})
