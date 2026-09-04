@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Print or send a combined daily revenue summary.
+"""Print or send combined daily and trailing-30-day revenue in USD.
 
 Square is queried live. Deliveroo and Uber Eats are read from the externally
-maintained JSON ledger in REVENUE_LEDGER_JSON so records remain available
-after a marketplace API's historical window expires.
+maintained JSON ledger so marketplace history can be retained beyond API limits.
 """
 
 from __future__ import annotations
@@ -11,16 +10,14 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime
-from decimal import Decimal
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from square_daily_revenue import (
-    list_completed_payments,
-    money,
-    telegram_send,
-)
+from square_daily_revenue import list_completed_payments, telegram_send
 
 
 CHANNELS = ("deliveroo", "uber_eats")
@@ -83,54 +80,109 @@ def external_totals(day: str) -> dict[str, tuple[int, int | None]]:
     return result
 
 
+def external_range(end_day: date, days: int) -> tuple[int, bool]:
+    total = 0
+    complete = True
+    entries = ledger()
+    for offset in range(days):
+        key = (end_day - timedelta(days=offset)).isoformat()
+        record = entries.get(key)
+        if not isinstance(record, dict):
+            complete = False
+            continue
+        for channel in CHANNELS:
+            item = record.get(channel)
+            if not isinstance(item, dict):
+                complete = False
+                continue
+            amount = item.get("gross_minor")
+            if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+                fail(f"Revenue ledger entry {key}.{channel}.gross_minor must be a non-negative integer")
+            total += amount
+    return total, complete
+
+
+def fx_rate(base: str, quote: str) -> Decimal:
+    if base == quote:
+        return Decimal("1")
+    request = urllib.request.Request(f"https://api.frankfurter.dev/v2/rate/{base}/{quote}")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        fail(f"FX rate unavailable: {exc}")
+    try:
+        rate = Decimal(str(payload["rate"]))
+    except (KeyError, ValueError, TypeError) as exc:
+        fail(f"FX rate response was invalid: {exc}")
+    if rate <= 0:
+        fail("FX rate must be positive")
+    return rate
+
+
+def convert_minor(amount_minor: int, base: str, rate: Decimal) -> int:
+    if base == "USD":
+        return amount_minor
+    return int((Decimal(amount_minor) * rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
 def summary(day: str) -> str:
-    day_start = datetime.strptime(day, "%Y-%m-%d").replace(
-        tzinfo=ZoneInfo(os.getenv("SQUARE_TIMEZONE", "Europe/London"))
-    )
-    square_minor = 0
-    square_orders = 0
-    currency = "GBP"
-    square_status = "not connected"
+    timezone_name = os.getenv("SQUARE_TIMEZONE", "Europe/London")
+    local_day = datetime.strptime(day, "%Y-%m-%d").date()
+    day_start = datetime.combine(local_day, datetime.min.time(), ZoneInfo(timezone_name))
+    day_end = day_start + timedelta(days=1)
+    trailing_start = day_start - timedelta(days=29)
+
     token = os.getenv("SQUARE_ACCESS_TOKEN")
     location_id = os.getenv("SQUARE_LOCATION_ID")
-    if token and location_id:
-        square_minor, square_orders, currency = list_completed_payments(
-            token, location_id, day_start, day_start.replace(hour=23, minute=59, second=59)
+    source_currency = os.getenv("REVENUE_SOURCE_CURRENCY", "GBP").upper()
+    square_today = 0
+    square_trailing = 0
+    square_connected = bool(token and location_id)
+    if square_connected:
+        square_today, _, source_currency = list_completed_payments(token, location_id, day_start, day_end)
+        square_trailing, _, source_currency = list_completed_payments(
+            token, location_id, trailing_start, day_end
         )
-        square_status = f"{money(square_minor, currency)} ({square_orders} payments)"
 
-    external = external_totals(day)
-    lines = [
-        "📊 Corgi Cafe — revenue",
-        f"Date: {day}",
-        f"Square: {square_status}",
-    ]
-    known_minor = square_minor
-    known_channels = 1 if token and location_id else 0
-    for channel, label in (("deliveroo", "Deliveroo"), ("uber_eats", "Uber Eats")):
-        if channel not in external:
-            lines.append(f"{label}: not recorded")
-            continue
-        amount, orders = external[channel]
-        order_text = f" ({orders} orders)" if orders is not None else ""
-        lines.append(f"{label}: {money(amount, currency)}{order_text}")
-        known_minor += amount
-        known_channels += 1
-    if known_channels == len(CHANNELS) + 1:
-        lines.append(f"FULL TOTAL: {money(known_minor, currency)}")
-    else:
-        lines.append(f"KNOWN TOTAL: {money(known_minor, currency)}")
-        lines.append("Coverage: incomplete — add the missing channel totals to the external ledger.")
-    return "\n".join(lines)
+    external_today = sum(amount for amount, _ in external_totals(day).values())
+    external_trailing, external_complete = external_range(local_day, 30)
+    rate = fx_rate(source_currency, "USD")
+    today_total = convert_minor(square_today + external_today, source_currency, rate)
+    trailing_total = convert_minor(square_trailing + external_trailing, source_currency, rate)
+    coverage = "complete" if square_connected and external_complete else "partial"
+
+    rate_line = (
+        f"1 {source_currency} = {rate:.4f} USD (daily reference)"
+        if source_currency != "USD"
+        else "Currency: USD"
+    )
+    return "\n".join(
+        (
+            "📊 Corgi Cafe — revenue",
+            f"Today ({day}): __USD__{today_total / 100:,.2f}",
+            (
+                f"Trailing 30 days ({trailing_start.date().isoformat()} to {day}): "
+                f"__USD__{trailing_total / 100:,.2f}"
+            ),
+            f"FX: {rate_line}",
+            f"Coverage: {coverage}",
+        )
+    ).replace("__USD__", "$")
 
 
 def self_test() -> None:
     os.environ["REVENUE_LEDGER_JSON"] = json.dumps(
-        {"2026-09-04": {"deliveroo": {"gross_minor": 1234, "orders": 2}}}
+        {
+            "2026-09-04": {
+                "deliveroo": {"gross_minor": 1234, "orders": 2},
+                "uber_eats": {"gross_minor": 500, "orders": 1},
+            }
+        }
     )
     assert external_totals("2026-09-04")["deliveroo"] == (1234, 2)
-    assert "Deliveroo: £12.34 (2 orders)" in summary("2026-09-04")
-    assert "FULL TOTAL" not in summary("2026-09-04")
+    assert external_range(date(2026, 9, 4), 1) == (1734, True)
+    assert convert_minor(10000, "GBP", Decimal("1.35")) == 13500
     print("self-test passed")
 
 
