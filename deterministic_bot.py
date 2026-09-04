@@ -14,9 +14,11 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 
 SCRIPT = "/opt/hermes-cloud/scripts/revenue_summary.py"
+OFFSET_PATH = Path(os.getenv("TELEGRAM_OFFSET_PATH", "/opt/data/telegram_offset"))
 
 
 def api(token: str, method: str, payload: dict | None = None, timeout: int = 40) -> dict:
@@ -24,9 +26,7 @@ def api(token: str, method: str, payload: dict | None = None, timeout: int = 40)
     url = f"https://api.telegram.org/bot{token}/{method}"
     if payload is not None:
         data = urllib.parse.urlencode(payload).encode()
-    request = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}
-    )
+    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         result = json.load(response)
     if not result.get("ok"):
@@ -35,20 +35,12 @@ def api(token: str, method: str, payload: dict | None = None, timeout: int = 40)
 
 
 def allowed(message: dict) -> bool:
-    configured = {
-        item.strip().lower()
-        for item in os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
-        if item.strip()
-    }
+    configured = {item.strip().lower() for item in os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",") if item.strip()}
     if not configured:
         return True
     user = message.get("from") or {}
     username = str(user.get("username", "")).lower()
-    return (
-        str(user.get("id", "")) in configured
-        or username in configured
-        or f"@{username}" in configured
-    )
+    return str(user.get("id", "")) in configured or username in configured or f"@{username}" in configured
 
 
 def parse_command(text: str) -> tuple[str, str] | None:
@@ -83,8 +75,22 @@ def response_for(command: str, argument: str) -> str | None:
     if command == "revenue":
         return revenue_text()
     if command in {"start", "help", "commands"}:
-        return "Corgi Cafe bot\n\n/revenue — current day's live revenue\n/help — show available commands"
+        return "Corgi Cafe bot\n\n/revenue — current day's live revenue\n/help — show this help"
     return None
+
+
+def load_offset() -> int:
+    try:
+        return int(OFFSET_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def save_offset(offset: int) -> None:
+    OFFSET_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = OFFSET_PATH.with_suffix(".tmp")
+    temporary.write_text(str(offset), encoding="utf-8")
+    temporary.replace(OFFSET_PATH)
 
 
 class Health(BaseHTTPRequestHandler):
@@ -92,9 +98,7 @@ class Health(BaseHTTPRequestHandler):
         if self.path != "/health":
             self.send_error(404)
             return
-        body = json.dumps(
-            {"ok": True, "service": "corgi-revenue", "last_update": LAST_UPDATE}
-        ).encode()
+        body = json.dumps({"ok": True, "service": "corgi-revenue", "last_update": LAST_UPDATE}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -124,33 +128,17 @@ def run() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
     server = ThreadingHTTPServer(("0.0.0.0", int(os.getenv("PORT", "8080"))), Health)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    api(
-        token,
-        "setMyCommands",
-        {
-            "commands": json.dumps(
-                [
-                    {"command": "revenue", "description": "Today's live revenue"},
-                    {"command": "help", "description": "Show available commands"},
-                ]
-            )
-        },
-    )
-    offset = 0
+    api(token, "setMyCommands", {"commands": json.dumps([
+        {"command": "revenue", "description": "Today's live revenue"},
+        {"command": "help", "description": "Show available commands"},
+    ])})
+    offset = load_offset()
     while True:
         try:
-            updates = api(
-                token,
-                "getUpdates",
-                {
-                    "offset": offset,
-                    "timeout": 30,
-                    "allowed_updates": '["message"]',
-                },
-                timeout=40,
-            ).get("result", [])
+            updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'}, timeout=40).get("result", [])
             for update in updates:
                 offset = max(offset, int(update["update_id"]) + 1)
+                save_offset(offset)
                 message = update.get("message") or {}
                 if not allowed(message):
                     continue
@@ -159,11 +147,7 @@ def run() -> None:
                     continue
                 reply = response_for(*parsed)
                 if reply is not None:
-                    api(
-                        token,
-                        "sendMessage",
-                        {"chat_id": str(message["chat"]["id"]), "text": reply},
-                    )
+                    api(token, "sendMessage", {"chat_id": str(message["chat"]["id"]), "text": reply})
                 LAST_UPDATE = datetime.now(timezone.utc).isoformat()
         except urllib.error.HTTPError as exc:
             if exc.code == 409:
@@ -180,3 +164,4 @@ if __name__ == "__main__":
         self_test()
     else:
         run()
+
