@@ -12,6 +12,10 @@ jobs:
           python-version: '3.12'
       - run: python -m unittest -v test_bot
       - run: python scripts/revenue_summary.py --self-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test cloud_gateway.test.ts cloud_revenue.test.ts
       - run: sh -n entrypoint.sh
       - run: docker build -t corgi-bot-test .
       - run: docker run --rm --entrypoint python corgi-bot-test -c "from zoneinfo import ZoneInfo; import deterministic_bot; print(ZoneInfo('Europe/London'))"

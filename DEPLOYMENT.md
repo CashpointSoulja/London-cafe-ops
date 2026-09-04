@@ -1,41 +1,40 @@
-# Corgi Cafe bot: pre-deployment gate
+# Corgi Cafe bot — deployment record
 
-This revision is local and tested offline, not live-verified or deployed.
+The live bot is Supabase Edge Function `cafe-bot`, version 4, in Corgi Relay project `pvrmzqxtmhewyrluuqka`. It uses one Telegram webhook for `@londoncafeopsbot`; no Telegram poller is required. Render is excluded from the Telegram path. Its old process cannot be shut down from this workspace, so it must not be started alongside the webhook.
 
-## Behaviour
+## Live behaviour
 
-- `/revenue`: today's gross completed payments and trailing 30 calendar days in USD; current daily ECB reference applied to both. No deductions. Timestamped, cached up to 60 seconds. Incomplete marketplace coverage remains labelled partial.
-- `/task <description>`: records the submitted task, privately or in the originating chat. No assignment/reminder engine.
-- `/wins <description>`: records a win and queues the submitter's name and description for the reporting destination. No automatic bonus ranking or invented winners.
-- All users can use the commands. Telegram's own membership and bot visibility permissions still apply.
-- The one running worker schedules yesterday's completed day after 00:05 Europe/London, including DST. L30D ends on that same day. Polling checks every 30 seconds; provider/network latency can delay delivery.
-- Wins and daily reporting share `REPORT_CHAT_ID` and optional `REPORT_THREAD_ID`. Tasks are never forwarded there. Blank destination disables broadcasts and retains submitted wins for later delivery.
+- `/revenue` returns one gross daily USD figure and trailing-30-day USD figure. Refunds are not mentioned or subtracted.
+- `/task` records the submitted text.
+- `/wins` records the submitter and achievement and broadcasts that winner information to the configured reporting chat.
+- Anyone who can reach the bot may use the commands.
+- `pg_cron` runs `cafe-bot-worker` every minute through `pg_net`. At 00:05 Europe/London it queues the previous UK calendar day and its trailing 30-day report. Daily reports and wins use the same configured destination.
+- Jobs, outbox, and cached reports persist in PostgreSQL. RLS is locked down; only the service role accesses these tables.
 
-## Destination awaiting access
+## Verified state
 
-User supplied `https://t.me/c/2394851554/203272`.
-The candidate chat ID is `-1002394851554`; `203272` is a message ID, not a verified topic ID.
-On 2026-09-04, Telegram `getChat` returned `Bad Request: chat not found` for this bot.
-Do not activate or assume a topic. Add `@londoncafeopsbot`, verify membership and posting permissions, then set the destination. Only test in Ayo's private chat.
+Private tests completed: `/revenue`, `/task`, and `/wins` sent successfully 4 times; a real incoming win was processed successfully. `cafe-bot-worker` completed successfully after `pg_net` was installed. Automated resolver supplied only `-2394851554` and `-1002394851554`; neither is a safe assumption from a Telegram URL. No other fallback is used, and forum topics are skipped until clarified.
 
-## Deployment requirements (not yet satisfied)
+The destination remains unset until the bot is added to the Corgi group and Telegram `getChat` succeeds. The user must add `@londoncafeopsbot` and grant posting permission. Tests remain private; no group test was sent.
 
-1. An always-running host with restart-on-failure and a persistent volume mounted at `/opt/data`. Free Render sleep/ephemeral storage does **not** meet this requirement. The keepalive workflow is best effort, not an uptime guarantee.
-2. Exactly one deployed Telegram poller. Stop the old poller before starting this one; never test by launching a second production poller locally.
-3. Retain/back up the database and any existing legacy records before migration. SQLite state survives process restarts only while its underlying storage survives. Existing JSONL files are left untouched, not imported.
-4. Configure `TELEGRAM_BOT_TOKEN`, `SQUARE_ACCESS_TOKEN`, `SQUARE_LOCATION_ID` securely. `SQUARE_TIMEZONE=Europe/London`. No credentials in Git, logs, or messages.
-5. Disable the old GitHub daily schedule at cutover; the replacement workflow is preview-only. The bot owns nightly scheduling, avoiding multiple broadcasters.
-6. Verify `/revenue`, `/task`, `/wins` privately, restart recovery, actual private delivery, live Square totals, and the chosen group's permissions before announcing completion.
+## Revenue coverage
 
-## Reliability scope
+Square is connected. Deliveroo is verified only in sandbox, so marketplace coverage remains partial. Uber Eats is not connected. Monthly subsidiary email reporting to Emily and Derrick is not built because its format and recipients are unconfirmed. Per-drink notifications, four-location rankings, and bonus calculations are not built; the requested Nico-facing version is concise daily revenue, L30D revenue, and submitted wins—not invented bonus awards.
 
-SQLite persists received work before acknowledging it. Tasks/wins and revenue have separate worker lanes. Outbound sends retry; confirmed sends are recorded. Duplicate incoming updates and daily jobs are deduplicated.
+## Deployment procedure
 
-Telegram has no send-message idempotency key: if it accepts a message but the response is lost, a retry can duplicate it. This implementation favours delivery over silent loss; it does not promise exactly-once delivery or zero downtime. An outage spanning multiple whole days is not automatically backfilled by the scheduler.
+Use the Composio account alias `corgi` for Supabase operations. Tools used are `SUPABASE_BETA_RUN_SQL_QUERY`, `SUPABASE_UPDATE_A_FUNCTION`, `SUPABASE_GET_FUNCTION`, and `SUPABASE_GET_SECURITY_ADVISORS`. Bundle locally when required:
 
-Deliveroo/Uber Eats automated ingestion, four-location comparisons, bonus rules, and monthly subsidiary reports are not implemented by this change. Marketplace ledger inputs must not duplicate Square payments.
+```sh
+npx esbuild supabase/functions/cafe-bot/index.ts --bundle --format=esm --platform=neutral --outfile=/tmp/cafe-bot.js
+```
 
-## Checks
+Deploy through `SUPABASE_UPDATE_A_FUNCTION` to project `pvrmzqxtmhewyrluuqka` with `verify_jwt: false` because the function validates webhook and worker secrets itself. Store only `CAFEBOT_*` secrets (`CAFEBOT_TELEGRAM_TOKEN`, `CAFEBOT_WEBHOOK_SECRET`, `CAFEBOT_WORKER_SECRET`, `CAFEBOT_SQUARE_TOKEN`, `CAFEBOT_SQUARE_LOCATION`) and Supabase secrets; never commit or paste values.
 
-Run `python3 -m unittest -v test_bot` and `python3 scripts/revenue_summary.py --self-test`.
-These tests never contact Telegram. They cover routing, open access, persisted replay, retry, UK DST, previous-day scheduling, gross-payment pagination, partial coverage, and caching. They are not evidence of live deployment.
+GitHub branch `codex/cafe-reliable-reporting` contains the deployment source. The current checks pass: 13 Python tests and 10 TypeScript tests. Two real incoming private revenue requests also completed and were delivered. Silent minute-by-minute refreshes keep reports warm; older-day Square totals refresh at least every 15 minutes, while current-day payments are fetched on refresh. Reports display their data timestamp.
+
+Before a new deployment, provision the migration, function secrets, and Vault secret named `cafe_bot_worker_secret`. The existing `cafe-bot-worker` cron job invokes `/tick` every minute using that Vault secret in `X-Worker-Secret`; both `pg_cron` and `pg_net` must be installed. Call `/install` with the worker secret only after deployment verification to register the three commands and webhook. Never copy production secret values into repository files.
+
+Rollback must remove the webhook or deploy a corrected webhook version; never run the old polling gateway at the same time.
+
+The local app heartbeat health monitor runs every 15 minutes and is only supplementary. Cloud scheduling is independent.
