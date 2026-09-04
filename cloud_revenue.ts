@@ -179,6 +179,6 @@ export async function revenue(day?: string, history?: { days: Record<string, { m
   const trailingUsd = halfUp(safeAdd(squareTrailing, ledger.minor, "trailing total"), rate);
   const timestamp = new Intl.DateTimeFormat("en-GB", { timeZone: UK, dateStyle: "short", timeStyle: "short" }).format(now);
   const coverage = ledger.covered === dates.length ? "complete" : "partial";
-  const body = ["📊 Corgi Cafe — revenue", `Daily revenue (${target}): ${money(dailyUsd)}`, `Trailing 30 days (${dates[0]} to ${target}): ${money(trailingUsd)}`, `FX: 1 GBP = ${fxInfo.display.toFixed(4)} USD (ECB daily reference, ${fxInfo.date})`, `Coverage: ${coverage}`, `Updated: ${timestamp} UK`].join("\n");
+  const body = ["📊 Corgi Cafe — revenue", target, "", `Daily revenue: ${money(dailyUsd)}`, `Trailing 30 days: ${money(trailingUsd)}`].join("\n");
   return { body, source: { square: { dailyMinor: dailySquare, trailingMinor: squareTrailing, dailyAmountsMinor: Object.fromEntries(dates.map((date) => [date, square.days[date]?.minor ?? 0])), completedCount: square.count, currency: "GBP", history: { days: Object.fromEntries(dates.map((date) => [date, { minor: square.days[date]?.minor ?? 0, count: square.days[date]?.count ?? 0 }])), fetchedAt: reuse ? history!.fetchedAt : now.toISOString() } }, ledger: { dailyMinor: dailyLedger, trailingMinor: ledger.minor, coveredDates: ledger.covered, expectedDates: dates.length, channels: ["deliveroo", "uber_eats"] }, fx: { rate: fxInfo.display, date: fxInfo.date, base: "GBP", quote: "USD" }, coverage, timestampUK: timestamp } };
 }

@@ -27,8 +27,8 @@ test("aggregates completed GBP payments, pagination, ledger and ECB FX", async (
   };
   try {
     const result = await revenue("2026-03-29");
-    assert.match(result.body, /Daily revenue \(2026-03-29\): \$14\.38/);
-    assert.match(result.body, /Coverage: partial/);
+    assert.match(result.body, /^📊 Corgi Cafe — revenue\n2026-03-29\n\nDaily revenue: \$14\.38\nTrailing 30 days: \$[\d,.]+$/);
+    assert.equal((result.source as any).coverage, "partial");
     assert.equal((result.source as any).square.dailyMinor, 1000);
     assert.equal((result.source as any).square.trailingMinor, 3000);
     assert.equal((result.source as any).square.completedCount, 2);
