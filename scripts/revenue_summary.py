@@ -12,6 +12,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -105,16 +106,30 @@ def external_range(end_day: date, days: int) -> tuple[int, bool]:
 def fx_rate(base: str, quote: str) -> Decimal:
     if base == quote:
         return Decimal("1")
-    request = urllib.request.Request(f"https://api.frankfurter.dev/v2/rate/{base}/{quote}")
+    request = urllib.request.Request(
+        "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml",
+        headers={"User-Agent": "corgi-revenue/1.0"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            payload = json.load(response)
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+            root = ET.fromstring(response.read())
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ET.ParseError) as exc:
         fail(f"FX rate unavailable: {exc}")
+    rates = {
+        node.attrib["currency"]: Decimal(node.attrib["rate"])
+        for node in root.iter()
+        if "currency" in node.attrib and "rate" in node.attrib
+    }
+    rates["EUR"] = Decimal("1")
     try:
-        rate = Decimal(str(payload["rate"]))
-    except (KeyError, ValueError, TypeError) as exc:
-        fail(f"FX rate response was invalid: {exc}")
+        if base == "EUR":
+            rate = rates[quote]
+        elif quote == "EUR":
+            rate = Decimal("1") / rates[base]
+        else:
+            rate = rates[quote] / rates[base]
+    except (KeyError, ZeroDivisionError) as exc:
+        fail(f"FX rate unavailable for {base}/{quote}: {exc}")
     if rate <= 0:
         fail("FX rate must be positive")
     return rate
