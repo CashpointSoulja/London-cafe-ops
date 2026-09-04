@@ -1,0 +1,40 @@
+name: Daily Square revenue broadcast
+
+on:
+  schedule:
+    - cron: "0 16,17 * * *"
+  workflow_dispatch:
+    inputs:
+      report_date:
+        description: "Optional report date (YYYY-MM-DD); blank means today"
+        required: false
+        type: string
+      dry_run:
+        description: "Read Square and show the message without sending it"
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  broadcast:
+    runs-on: ubuntu-latest
+    env:
+      SQUARE_ACCESS_TOKEN: ${{ secrets.SQUARE_ACCESS_TOKEN }}
+      SQUARE_LOCATION_ID: ${{ secrets.SQUARE_LOCATION_ID }}
+      SQUARE_TIMEZONE: Europe/London
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      REPORT_DATE: ${{ inputs.report_date }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      SCHEDULE_GUARD: ${{ github.event_name == 'schedule' && '17' || '' }}
+    steps:
+      - name: Check out the report
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Read Square and broadcast
+        run: python scripts/square_daily_revenue.py
